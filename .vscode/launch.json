@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "ResolveDesk Mobile (Local Dev)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "args": [
+        "--dart-define-from-file=env/dev.json"
+      ]
+    },
+    {
+      "name": "ResolveDesk Mobile (Live Production)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "args": [
+        "--dart-define-from-file=env/prod.json"
+      ]
+    }
+  ]
+}
