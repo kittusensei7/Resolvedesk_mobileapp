@@ -859,43 +859,69 @@ class _TechnicianDashboardPageState extends State<TechnicianDashboardPage> with 
                                 // Top Row: ID, Plan badge, Status Chip
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Row(
-                                      children: [
-                                        Hero(
-                                          tag: 'complaint_number_${comp['id']}',
-                                          child: Material(
-                                            color: Colors.transparent,
-                                            child: Text(
-                                              comp['complaint_number']?.toString() ?? '#${comp['id']}',
-                                              style: const TextStyle(
-                                                fontWeight: FontWeight.w700,
-                                                fontSize: 14.5,
-                                                letterSpacing: -0.2,
-                                                color: Color(0xff0f172a),
+                                    Expanded(
+                                      child: Wrap(
+                                        spacing: 6,
+                                        runSpacing: 4,
+                                        crossAxisAlignment: WrapCrossAlignment.center,
+                                        children: [
+                                          Hero(
+                                            tag: 'complaint_number_${comp['id']}',
+                                            child: Material(
+                                              color: Colors.transparent,
+                                              child: Text(
+                                                comp['complaint_number']?.toString() ?? '#${comp['id']}',
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.w700,
+                                                  fontSize: 14.5,
+                                                  letterSpacing: -0.2,
+                                                  color: Color(0xff0f172a),
+                                                ),
                                               ),
                                             ),
                                           ),
-                                        ),
-                                      const SizedBox(width: 8),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xfff0f9ff),
-                                          borderRadius: BorderRadius.circular(6),
-                                          border: Border.all(color: const Color(0xffbae6fd)),
-                                        ),
-                                        child: Text(
-                                          comp['coverage_type']?.toString().toUpperCase() ?? 'AMC',
-                                          style: const TextStyle(
-                                            fontSize: 9.5,
-                                            fontWeight: FontWeight.w800,
-                                            color: Color(0xff0284c7),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xfff0f9ff),
+                                              borderRadius: BorderRadius.circular(6),
+                                              border: Border.all(color: const Color(0xffbae6fd)),
+                                            ),
+                                            child: Text(
+                                              comp['coverage_type']?.toString().toUpperCase() ?? 'AMC',
+                                              style: const TextStyle(
+                                                fontSize: 9.5,
+                                                fontWeight: FontWeight.w800,
+                                                color: Color(0xff0284c7),
+                                              ),
+                                            ),
                                           ),
-                                        ),
+                                          if ((comp['solved_through']?.toString().trim() ?? '').isNotEmpty)
+                                            _buildDeliveryModeChip(comp['solved_through'].toString().trim()),
+                                          if (comp['has_location_flag'] == true ||
+                                              comp['has_location_flag'] == 1)
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xfffef2f2),
+                                                borderRadius: BorderRadius.circular(6),
+                                                border: Border.all(color: const Color(0xfffecaca)),
+                                              ),
+                                              child: const Text(
+                                                'FLAGGED',
+                                                style: TextStyle(
+                                                  fontSize: 9,
+                                                  fontWeight: FontWeight.w800,
+                                                  color: Color(0xffb91c1c),
+                                                ),
+                                              ),
+                                            ),
+                                        ],
                                       ),
-                                    ],
-                                  ),
+                                    ),
+                                    const SizedBox(width: 8),
                                   // Status Pill with HIG color
                                   Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3.5),
@@ -1511,6 +1537,47 @@ class _TechnicianDashboardPageState extends State<TechnicianDashboardPage> with 
                     ),
                 ],
               ),
+      ),
+    );
+  }
+
+  Widget _buildDeliveryModeChip(String rawMode) {
+    final normalized = rawMode.toLowerCase();
+    final (Color bg, Color fg, Color border, String label) = switch (normalized) {
+      'remote' || 'online' => (
+        const Color(0xffeff6ff),
+        const Color(0xff1d4ed8),
+        const Color(0xffbfdbfe),
+        'REMOTE',
+      ),
+      'in-office' => (
+        const Color(0xfff5f3ff),
+        const Color(0xff6d28d9),
+        const Color(0xffddd6fe),
+        'IN-OFFICE',
+      ),
+      _ => (
+        const Color(0xffecfdf5),
+        const Color(0xff047857),
+        const Color(0xffa7f3d0),
+        'ON-SITE',
+      ),
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: border),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 9,
+          fontWeight: FontWeight.w800,
+          color: fg,
+        ),
       ),
     );
   }

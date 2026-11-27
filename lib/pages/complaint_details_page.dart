@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../config/api_config.dart';
+import '../models/visit_verification_models.dart';
 import '../services/permission_access.dart';
 import '../widgets/signature_upload_widget.dart';
+import '../widgets/visit_verification_sheet.dart';
 
 class ComplaintDetailsPage extends StatefulWidget {
   const ComplaintDetailsPage({super.key, required this.complaintId});
@@ -203,6 +205,21 @@ class _ComplaintDetailsPageState extends State<ComplaintDetailsPage> {
     }
   }
 
+  String _complaintSummary(Map<String, dynamic>? c) {
+    if (c == null) return 'Complaint #${widget.complaintId}';
+    final numLabel = c['complaint_number']?.toString() ?? '#${c['id'] ?? widget.complaintId}';
+    final client = c['company_name']?.toString() ?? c['customer_name']?.toString() ?? 'Client';
+    final cat = c['category']?.toString();
+    final issue = c['issue_type']?.toString();
+    final parts = <String>[
+      numLabel,
+      client,
+      if (cat != null && cat.isNotEmpty)
+        issue != null && issue.isNotEmpty ? '$cat ($issue)' : cat,
+    ];
+    return parts.join(' • ');
+  }
+
   Future<void> _updateStatus(String status) async {
     HapticFeedback.mediumImpact();
     if (status == 'Resolved' &&
@@ -221,6 +238,49 @@ class _ComplaintDetailsPageState extends State<ComplaintDetailsPage> {
       return;
     }
 
+    final complaint = _data?['complaint'] as Map<String, dynamic>?;
+    final currentStatus = complaint?['status']?.toString().trim() ?? '';
+    String effectiveSolvedThrough = _solvedThrough;
+    VisitVerificationResult? verification;
+
+    if (status == 'Ongoing' && currentStatus != 'Ongoing') {
+      verification = await VisitVerificationSheet.show(
+        context,
+        complaintId: widget.complaintId,
+        mode: VisitVerificationMode.checkin,
+        complaintSummary: _complaintSummary(complaint),
+        category: complaint?['category']?.toString(),
+        issueType: complaint?['issue_type']?.toString(),
+        description: complaint?['description']?.toString(),
+      );
+      if (!mounted || verification == null) return;
+      effectiveSolvedThrough = verification.supportType;
+      setState(() => _solvedThrough = effectiveSolvedThrough);
+
+      if (verification.alreadySubmittedCheckin) {
+        await _loadDetails();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('On-site visit checked in! Work started.')),
+          );
+        }
+        return;
+      }
+    } else if (status == 'Resolved' &&
+        currentStatus != 'Resolved' &&
+        effectiveSolvedThrough == 'On-Site') {
+      verification = await VisitVerificationSheet.show(
+        context,
+        complaintId: widget.complaintId,
+        mode: VisitVerificationMode.resolution,
+        complaintSummary: _complaintSummary(complaint),
+        category: complaint?['category']?.toString(),
+        issueType: complaint?['issue_type']?.toString(),
+        description: complaint?['description']?.toString(),
+      );
+      if (!mounted || verification == null) return;
+    }
+
     setState(() => _saving = true);
     try {
       final dio = await ApiConfig.getDio();
@@ -234,10 +294,16 @@ class _ComplaintDetailsPageState extends State<ComplaintDetailsPage> {
           'spareOldSeries': _spareOldSeriesController.text.trim(),
           'spareNewSeries': _spareNewSeriesController.text.trim(),
           'callType': _callType,
-          'solvedThrough': _solvedThrough,
+          'solvedThrough': effectiveSolvedThrough,
           'chargeAmount': ['AMC', 'Charge Based'].contains(_callType) ? _chargeAmountController.text.trim() : null,
           'customerSignature': _customerSignature,
           'engineerSignature': _engineerSignature,
+          if (verification != null && status == 'Resolved') ...{
+            'resolvedPhoto': verification.photoBase64,
+            'resolvedLat': verification.lat,
+            'resolvedLng': verification.lng,
+            'resolvedAddress': verification.address,
+          },
         },
       );
       await _loadDetails();
@@ -432,6 +498,21 @@ class _ComplaintDetailsPageState extends State<ComplaintDetailsPage> {
     final text = _newRemarkController.text.trim();
     if (text.isEmpty) return;
 
+    VisitVerificationResult? verification;
+    final complaint = _data?['complaint'] as Map<String, dynamic>?;
+    if (_markResolved && _solvedThrough == 'On-Site') {
+      verification = await VisitVerificationSheet.show(
+        context,
+        complaintId: widget.complaintId,
+        mode: VisitVerificationMode.resolution,
+        complaintSummary: _complaintSummary(complaint),
+        category: complaint?['category']?.toString(),
+        issueType: complaint?['issue_type']?.toString(),
+        description: complaint?['description']?.toString(),
+      );
+      if (!mounted || verification == null) return;
+    }
+
     setState(() => _saving = true);
     try {
       final dio = await ApiConfig.getDio();
@@ -450,6 +531,12 @@ class _ComplaintDetailsPageState extends State<ComplaintDetailsPage> {
           'chargeAmount': _callType == 'Charge Based' ? _chargeAmountController.text.trim() : null,
           'customerSignature': _customerSignature,
           'engineerSignature': _engineerSignature,
+          if (verification != null && _markResolved) ...{
+            'resolvedPhoto': verification.photoBase64,
+            'resolvedLat': verification.lat,
+            'resolvedLng': verification.lng,
+            'resolvedAddress': verification.address,
+          },
         },
       );
       _newRemarkController.clear();
@@ -537,6 +624,7 @@ class _ComplaintDetailsPageState extends State<ComplaintDetailsPage> {
     final remarks = List<dynamic>.from(_data?['remarks'] as List? ?? const []);
     final statusHistory = List<dynamic>.from(_data?['statusHistory'] as List? ?? const []);
     final assignmentHistory = List<dynamic>.from(_data?['assignmentHistory'] as List? ?? const []);
+    final visits = List<dynamic>.from(_data?['visits'] as List? ?? const []);
 
     final isResolved = complaint?['status']?.toString().trim() == 'Resolved';
 
@@ -1528,6 +1616,19 @@ class _ComplaintDetailsPageState extends State<ComplaintDetailsPage> {
 
                       const SizedBox(height: 14),
 
+                      // Field Visit & Service Mode Audit Card
+                      if (visits.isNotEmpty ||
+                          ['Remote', 'In-Office', 'Online'].contains(
+                            (complaint?['solved_through'] ?? '').toString().trim(),
+                          )) ...[
+                        _buildVisitAuditCard(
+                          visits,
+                          solvedThrough: (complaint?['solved_through'] ?? '').toString().trim(),
+                          ticketStatus: (complaint?['status'] ?? '').toString().trim(),
+                        ),
+                        const SizedBox(height: 14),
+                      ],
+
                       // Assignment & Status History Card
                       if (statusHistory.isNotEmpty || assignmentHistory.isNotEmpty)
                         Builder(builder: (context) {
@@ -1739,6 +1840,183 @@ class _ComplaintDetailsPageState extends State<ComplaintDetailsPage> {
                     ],
                   ),
                 ),
+    );
+  }
+
+  Widget _buildVisitAuditCard(
+    List<dynamic> visits, {
+    String solvedThrough = '',
+    String ticketStatus = '',
+  }) {
+    final isRemote = solvedThrough == 'Remote' || solvedThrough == 'Online';
+    final isInOffice = solvedThrough == 'In-Office';
+
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: const BorderSide(color: Color(0xffe2e8f0)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  isRemote
+                      ? Icons.support_agent_outlined
+                      : isInOffice
+                          ? Icons.home_repair_service_outlined
+                          : Icons.verified_user_outlined,
+                  size: 18,
+                  color: const Color(0xff1e3a8a),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  visits.isNotEmpty ? 'Field Visit Verification' : 'Service Delivery Verification',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: const Color(0xff1e3a8a),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (visits.isEmpty && (isRemote || isInOffice))
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xfff8fafc),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: isRemote ? const Color(0xffbfdbfe) : const Color(0xffddd6fe),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: isRemote ? const Color(0xffeff6ff) : const Color(0xfff5f3ff),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            isRemote ? 'Remote Support' : 'In-Office Workshop',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: isRemote ? const Color(0xff1d4ed8) : const Color(0xff6d28d9),
+                            ),
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          ticketStatus.isEmpty ? 'LOGGED' : ticketStatus.toUpperCase(),
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xff475569),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      isRemote
+                          ? 'Handled remotely via AnyDesk / Call. GPS check-in and arrival photo are not required.'
+                          : 'Serviced at In-Office Workshop. GPS check-in and arrival photo are not required.',
+                      style: const TextStyle(fontSize: 12, color: Color(0xff334155)),
+                    ),
+                  ],
+                ),
+              ),
+            ...visits.map((rawVisit) {
+              final v = Map<String, dynamic>.from(rawVisit as Map);
+              final flagged = v['is_location_flagged'] == true || v['is_location_flagged'] == 1;
+              final badgeText = formatVisitGeofenceLabel(v);
+              final flagReason = v['location_flag_reason']?.toString().trim() ?? '';
+              final checkinAddr = v['checkin_address']?.toString() ?? '';
+              final resolvedAddr = v['resolved_address']?.toString() ?? '';
+              final visitStatus = v['visit_status']?.toString().toUpperCase() ?? 'LOGGED';
+
+              return Container(
+                margin: const EdgeInsets.only(bottom: 10),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xfff8fafc),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: flagged ? const Color(0xfffecaca) : const Color(0xffe2e8f0),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: flagged ? const Color(0xfffef2f2) : const Color(0xfff0fdf4),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            badgeText,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: flagged ? const Color(0xffb91c1c) : const Color(0xff15803d),
+                            ),
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          visitStatus,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xff475569),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (flagged && flagReason.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        flagReason,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xffb91c1c),
+                        ),
+                      ),
+                    ],
+                    if (checkinAddr.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'Check-In: $checkinAddr',
+                        style: const TextStyle(fontSize: 12, color: Color(0xff334155)),
+                      ),
+                    ],
+                    if (resolvedAddr.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        'Resolved: $resolvedAddr',
+                        style: const TextStyle(fontSize: 12, color: Color(0xff334155)),
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            }),
+          ],
+        ),
+      ),
     );
   }
 }
